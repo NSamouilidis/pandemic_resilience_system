@@ -1,0 +1,96 @@
+@import url('./dashboard.css');
+
+.profile-pic.merchant {
+    background-color: #5cb85c;
+}
+
+.alert {
+    padding: 1rem;
+    border-radius: 4px;
+    margin-bottom: 1.5rem;
+}
+
+.alert-warning {
+    background-color: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeeba;
+}
+
+.alert strong {
+    font-weight: 600;
+}
+
+.category-badge {
+    display: inline-block;
+    padding: 0.35rem 0.7rem;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.category-badge.essential {
+    background-color: #cce5ff;
+    color: #004085;
+}
+
+.category-badge.medical {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.category-badge.restricted {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+.category-badge.normal {
+    background-color: #e2e3e5;
+    color: #383d41;
+}
+
+.status-indicator {
+    display: inline-block;
+    padding: 0.35rem 0.7rem;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.status-indicator.ok {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.status-indicator.low {
+    background-color: #fff3cd;
+    color: #856404;
+}
+
+.chart-container {
+    margin-bottom: 2rem;
+}
+
+#inventoryChart {
+    max-height: 300px;
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.data-table {
+    font-size: 0.95rem;
+}
+
+.data-table th {
+    white-space: nowrap;
+}
+
+@media (max-width: 992px) {
+    .chart-container {
+        grid-template-columns: 1fr;
+    }
+}
