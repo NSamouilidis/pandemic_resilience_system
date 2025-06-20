@@ -1,253 +1,98 @@
 <?php
+// Start session
 session_start();
 
+// Check if user is logged in
 if (!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true) {
     header("location: ../../login.php");
     exit;
 }
 
-if ($_SESSION["role"] !== "merchant") {
+// Check if role is correct
+if ($_SESSION["role"] !== "government") {
     header("location: ../../index.php");
     exit;
 }
 
+// Include database connection
 require_once "../../config/db_connect.php";
 
-$merchant_id = null;
-$sql = "SELECT merchant_id FROM merchants WHERE prs_id = ?";
-$stmt = $conn->prepare($sql);
-$stmt->bind_param("s", $_SESSION["prs_id"]);
-$stmt->execute();
-$result = $stmt->get_result();
-
-if ($result->num_rows === 1) {
-    $row = $result->fetch_assoc();
-    $merchant_id = $row["merchant_id"];
-} else {
-    header("location: ../../index.php");
-    exit;
-}
-$stmt->close();
-
-$action_message = "";
-$action_status = "";
-
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    if (isset($_POST["action"])) {
-        $action = $_POST["action"];
-        
-        switch ($action) {
-            case "add":
-                $item_id = isset($_POST["item_id"]) ? (int)$_POST["item_id"] : 0;
-                $quantity = isset($_POST["quantity"]) ? (int)$_POST["quantity"] : 0;
-                $price = isset($_POST["price"]) ? (float)$_POST["price"] : 0;
-                
-                if ($item_id <= 0 || $quantity < 0 || $price <= 0) {
-                    $action_message = "Invalid item data. Please check your input.";
-                    $action_status = "danger";
-                } else {
-                    $check_sql = "SELECT inventory_id FROM inventory WHERE merchant_id = ? AND item_id = ?";
-                    $stmt = $conn->prepare($check_sql);
-                    $stmt->bind_param("ii", $merchant_id, $item_id);
-                    $stmt->execute();
-                    $check_result = $stmt->get_result();
-                    
-                    if ($check_result->num_rows > 0) {
-                        $row = $check_result->fetch_assoc();
-                        $inventory_id = $row["inventory_id"];
-                        
-                        $update_sql = "UPDATE inventory SET quantity = ?, price = ? WHERE inventory_id = ?";
-                        $stmt = $conn->prepare($update_sql);
-                        $stmt->bind_param("idi", $quantity, $price, $inventory_id);
-                        
-                        if ($stmt->execute()) {
-                            $action_message = "Item updated successfully.";
-                            $action_status = "success";
-                            
-                            log_activity($_SESSION["prs_id"], "update", "inventory", $inventory_id, "success");
-                        } else {
-                            $action_message = "Error updating item: " . $stmt->error;
-                            $action_status = "danger";
-                        }
-                    } else {
-                        $insert_sql = "INSERT INTO inventory (merchant_id, item_id, quantity, price) VALUES (?, ?, ?, ?)";
-                        $stmt = $conn->prepare($insert_sql);
-                        $stmt->bind_param("iiid", $merchant_id, $item_id, $quantity, $price);
-                        
-                        if ($stmt->execute()) {
-                            $inventory_id = $stmt->insert_id;
-                            $action_message = "Item added to inventory successfully.";
-                            $action_status = "success";
-                            
-                            log_activity($_SESSION["prs_id"], "create", "inventory", $inventory_id, "success");
-                        } else {
-                            $action_message = "Error adding item: " . $stmt->error;
-                            $action_status = "danger";
-                        }
-                    }
-                    $stmt->close();
-                }
-                break;
-                
-            case "update":
-                $inventory_id = isset($_POST["inventory_id"]) ? (int)$_POST["inventory_id"] : 0;
-                $quantity = isset($_POST["quantity"]) ? (int)$_POST["quantity"] : 0;
-                $price = isset($_POST["price"]) ? (float)$_POST["price"] : 0;
-                
-                if ($inventory_id <= 0 || $quantity < 0 || $price <= 0) {
-                    $action_message = "Invalid inventory data. Please check your input.";
-                    $action_status = "danger";
-                } else {
-                    $check_sql = "SELECT COUNT(*) as count FROM inventory WHERE inventory_id = ? AND merchant_id = ?";
-                    $stmt = $conn->prepare($check_sql);
-                    $stmt->bind_param("ii", $inventory_id, $merchant_id);
-                    $stmt->execute();
-                    $check_result = $stmt->get_result();
-                    $row = $check_result->fetch_assoc();
-                    
-                    if ($row["count"] > 0) {
-                        $update_sql = "UPDATE inventory SET quantity = ?, price = ? WHERE inventory_id = ?";
-                        $stmt = $conn->prepare($update_sql);
-                        $stmt->bind_param("idi", $quantity, $price, $inventory_id);
-                        
-                        if ($stmt->execute()) {
-                            $action_message = "Inventory updated successfully.";
-                            $action_status = "success";
-                            
-                            log_activity($_SESSION["prs_id"], "update", "inventory", $inventory_id, "success");
-                        } else {
-                            $action_message = "Error updating inventory: " . $stmt->error;
-                            $action_status = "danger";
-                        }
-                    } else {
-                        $action_message = "You don't have permission to update this item.";
-                        $action_status = "danger";
-                    }
-                    $stmt->close();
-                }
-                break;
-                
-            case "delete":
-                $inventory_id = isset($_POST["inventory_id"]) ? (int)$_POST["inventory_id"] : 0;
-                
-                if ($inventory_id <= 0) {
-                    $action_message = "Invalid inventory ID.";
-                    $action_status = "danger";
-                } else {
-                    $check_sql = "SELECT COUNT(*) as count FROM inventory WHERE inventory_id = ? AND merchant_id = ?";
-                    $stmt = $conn->prepare($check_sql);
-                    $stmt->bind_param("ii", $inventory_id, $merchant_id);
-                    $stmt->execute();
-                    $check_result = $stmt->get_result();
-                    $row = $check_result->fetch_assoc();
-                    
-                    if ($row["count"] > 0) {
-                        $delete_sql = "DELETE FROM inventory WHERE inventory_id = ?";
-                        $stmt = $conn->prepare($delete_sql);
-                        $stmt->bind_param("i", $inventory_id);
-                        
-                        if ($stmt->execute()) {
-                            $action_message = "Item removed from inventory successfully.";
-                            $action_status = "success";
-                            
-                            log_activity($_SESSION["prs_id"], "delete", "inventory", $inventory_id, "success");
-                        } else {
-                            $action_message = "Error removing item: " . $stmt->error;
-                            $action_status = "danger";
-                        }
-                    } else {
-                        $action_message = "You don't have permission to delete this item.";
-                        $action_status = "danger";
-                    }
-                    $stmt->close();
-                }
-                break;
-        }
-    }
-}
-
-$page = isset($_GET["page"]) ? (int)$_GET["page"] : 1;
-$items_per_page = 10;
-$offset = ($page - 1) * $items_per_page;
-
-$category_filter = isset($_GET["category"]) ? sanitize_input($_GET["category"]) : "";
+// Get filter parameters
+$merchant_id = isset($_GET["merchant_id"]) ? (int)$_GET["merchant_id"] : null;
+$category = isset($_GET["category"]) ? sanitize_input($_GET["category"]) : "";
 $low_stock = isset($_GET["low_stock"]) ? (bool)$_GET["low_stock"] : false;
 $search = isset($_GET["search"]) ? sanitize_input($_GET["search"]) : "";
 
-$sql = "SELECT i.inventory_id, i.item_id, it.name as item_name, it.category, 
-        it.description, i.quantity, i.price, it.rationing_limit 
+// Build query
+$sql = "SELECT i.inventory_id, i.merchant_id, m.business_name, i.item_id, 
+        it.name as item_name, it.category, i.quantity, i.price, 
+        it.rationing_limit, u.city 
         FROM inventory i 
         JOIN items it ON i.item_id = it.item_id 
-        WHERE i.merchant_id = ?";
-$count_sql = "SELECT COUNT(*) as total FROM inventory i JOIN items it ON i.item_id = it.item_id WHERE i.merchant_id = ?";
+        JOIN merchants m ON i.merchant_id = m.merchant_id 
+        JOIN users u ON m.prs_id = u.prs_id 
+        WHERE 1=1";
 
-$params = [$merchant_id];
-$types = "i";
+$params = [];
+$types = "";
 
-if (!empty($category_filter)) {
+if ($merchant_id !== null) {
+    $sql .= " AND i.merchant_id = ?";
+    $params[] = $merchant_id;
+    $types .= "i";
+}
+
+if (!empty($category)) {
     $sql .= " AND it.category = ?";
-    $count_sql .= " AND it.category = ?";
-    $params[] = $category_filter;
+    $params[] = $category;
     $types .= "s";
 }
 
 if ($low_stock) {
     $sql .= " AND i.quantity < 10";
-    $count_sql .= " AND i.quantity < 10";
 }
 
 if (!empty($search)) {
-    $sql .= " AND (it.name LIKE ? OR it.description LIKE ?)";
-    $count_sql .= " AND (it.name LIKE ? OR it.description LIKE ?)";
+    $sql .= " AND (it.name LIKE ? OR m.business_name LIKE ?)";
     $search_param = "%" . $search . "%";
     $params[] = $search_param;
     $params[] = $search_param;
     $types .= "ss";
 }
 
-$sql .= " ORDER BY it.category, it.name LIMIT ? OFFSET ?";
-$params[] = $items_per_page;
-$params[] = $offset;
-$types .= "ii";
+$sql .= " ORDER BY i.quantity ASC, m.business_name, it.category, it.name";
 
-$total_items = 0;
-$count_stmt = $conn->prepare($count_sql);
-$count_stmt->bind_param(substr($types, 0, -2), ...array_slice($params, 0, -2));
-$count_stmt->execute();
-$count_result = $count_stmt->get_result();
-$count_row = $count_result->fetch_assoc();
-$total_items = $count_row["total"];
-$count_stmt->close();
-
-$total_pages = ceil($total_items / $items_per_page);
-
+// Execute query
 $inventory = [];
 $stmt = $conn->prepare($sql);
-$stmt->bind_param($types, ...$params);
+
+if (!empty($types)) {
+    $stmt->bind_param($types, ...$params);
+}
+
 $stmt->execute();
 $result = $stmt->get_result();
 
 while ($row = $result->fetch_assoc()) {
     $inventory[] = $row;
 }
+
 $stmt->close();
 
-$available_items = [];
-$items_sql = "SELECT i.item_id, i.name, i.category, i.description 
-             FROM items i 
-             LEFT JOIN inventory inv ON i.item_id = inv.item_id AND inv.merchant_id = ? 
-             WHERE inv.inventory_id IS NULL 
-             ORDER BY i.category, i.name";
-$items_stmt = $conn->prepare($items_sql);
-$items_stmt->bind_param("i", $merchant_id);
-$items_stmt->execute();
-$items_result = $items_stmt->get_result();
+// Get merchant list for filter dropdown
+$merchants = [];
+$merchant_sql = "SELECT m.merchant_id, m.business_name, u.city 
+                FROM merchants m 
+                JOIN users u ON m.prs_id = u.prs_id 
+                WHERE m.status = 'active' 
+                ORDER BY u.city, m.business_name";
+$merchant_result = $conn->query($merchant_sql);
 
-while ($row = $items_result->fetch_assoc()) {
-    $available_items[] = $row;
+while ($row = $merchant_result->fetch_assoc()) {
+    $merchants[] = $row;
 }
-$items_stmt->close();
 
+// Get category list for filter dropdown
 $categories = [];
 $category_sql = "SELECT DISTINCT category FROM items ORDER BY category";
 $category_result = $conn->query($category_sql);
@@ -256,6 +101,47 @@ while ($row = $category_result->fetch_assoc()) {
     $categories[] = $row["category"];
 }
 
+// Calculate inventory statistics
+$stats = [
+    'total_items' => 0,
+    'total_value' => 0,
+    'low_stock_count' => 0,
+    'by_category' => []
+];
+
+// Get total inventory stats
+$stats_sql = "SELECT COUNT(*) as total_items, 
+             SUM(i.quantity) as total_quantity, 
+             SUM(i.quantity * i.price) as total_value,
+             SUM(CASE WHEN i.quantity < 10 THEN 1 ELSE 0 END) as low_stock
+             FROM inventory i";
+$stats_result = $conn->query($stats_sql);
+$stats_row = $stats_result->fetch_assoc();
+
+$stats['total_items'] = $stats_row['total_items'];
+$stats['total_value'] = $stats_row['total_value'];
+$stats['low_stock_count'] = $stats_row['low_stock'];
+
+// Get stats by category
+$category_stats_sql = "SELECT it.category, 
+                      COUNT(*) as item_count, 
+                      SUM(i.quantity) as total_quantity,
+                      SUM(i.quantity * i.price) as total_value
+                      FROM inventory i
+                      JOIN items it ON i.item_id = it.item_id
+                      GROUP BY it.category
+                      ORDER BY it.category";
+$category_stats_result = $conn->query($category_stats_sql);
+
+while ($row = $category_stats_result->fetch_assoc()) {
+    $stats['by_category'][$row['category']] = [
+        'item_count' => $row['item_count'],
+        'total_quantity' => $row['total_quantity'],
+        'total_value' => $row['total_value']
+    ];
+}
+
+// Log page access
 log_activity($_SESSION["prs_id"], "view", "inventory", "page", "success");
 ?>
 
@@ -264,10 +150,11 @@ log_activity($_SESSION["prs_id"], "view", "inventory", "page", "success");
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manage Inventory - Merchant Dashboard</title>
+    <title>Inventory Status - Government Dashboard</title>
     <link rel="stylesheet" href="../../assets/css/main.css">
-    <link rel="stylesheet" href="../../assets/css/merchant-dashboard.css">
+    <link rel="stylesheet" href="../../assets/css/gov-dashboard.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <header>
@@ -284,108 +171,118 @@ log_activity($_SESSION["prs_id"], "view", "inventory", "page", "success");
     <main class="dashboard-container">
         <aside class="sidebar">
             <div class="user-profile">
-                <div class="profile-pic merchant">
+                <div class="profile-pic gov">
                     <span><?php echo substr($_SESSION["name"], 0, 1); ?></span>
                 </div>
                 <div class="profile-info">
                     <h3><?php echo htmlspecialchars($_SESSION["name"]); ?></h3>
-                    <p>Merchant</p>
+                    <p>Government Official</p>
                 </div>
             </div>
             
             <nav class="sidebar-nav">
                 <ul>
                     <li><a href="index.php">Dashboard</a></li>
-                    <li><a href="inventory.php" class="active">Manage Inventory</a></li>
-                    <li><a href="sales.php">Sales History</a></li>
-                    <li><a href="reports.php">Reports</a></li>
-                    <li><a href="#">Business Profile</a></li>
+                    <li><a href="users.php">Manage Users</a></li>
+                    <li><a href="merchants.php">Manage Merchants</a></li>
+                    <li><a href="inventory.php" class="active">Inventory Status</a></li>
+                    <li><a href="reports.php">Reports & Analytics</a></li>
+                    <li><a href="#">System Settings</a></li>
                 </ul>
             </nav>
         </aside>
         
         <div class="dashboard-content">
-            <h2>Manage Inventory</h2>
+            <h2>Inventory Status</h2>
             
-            <?php if (!empty($action_message)): ?>
-                <div class="alert alert-<?php echo $action_status; ?>">
-                    <?php echo $action_message; ?>
+            <div class="stats-container">
+                <div class="stat-card">
+                    <div class="stat-icon inventory">
+                        <i class="fas fa-boxes"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>Total Inventory Items</h3>
+                        <p class="stat-value"><?php echo number_format($stats['total_items']); ?></p>
+                    </div>
                 </div>
-            <?php endif; ?>
-            
-            <div class="action-container">
-                <button id="add-item-btn" class="btn btn-primary">
-                    <i class="fas fa-plus"></i> Add New Item
-                </button>
+                
+                <div class="stat-card">
+                    <div class="stat-icon value">
+                        <i class="fas fa-dollar-sign"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>Total Inventory Value</h3>
+                        <p class="stat-value">$<?php echo number_format($stats['total_value'], 2); ?></p>
+                    </div>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="stat-icon warning">
+                        <i class="fas fa-exclamation-triangle"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>Low Stock Items</h3>
+                        <p class="stat-value"><?php echo number_format($stats['low_stock_count']); ?></p>
+                    </div>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="stat-icon restricted">
+                        <i class="fas fa-shield-alt"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>Essential Items</h3>
+                        <p class="stat-value"><?php echo number_format($stats['by_category']['essential']['total_quantity'] ?? 0); ?></p>
+                    </div>
+                </div>
             </div>
             
-            <div id="add-item-form" class="form-container" style="display: none;">
-                <h3>Add New Item to Inventory</h3>
-                <form method="post" action="inventory.php">
-                    <input type="hidden" name="action" value="add">
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="item_id">Item</label>
-                            <select id="item_id" name="item_id" class="form-control" required>
-                                <option value="">Select an item...</option>
-                                <?php foreach ($available_items as $item): ?>
-                                    <option value="<?php echo $item["item_id"]; ?>">
-                                        <?php echo htmlspecialchars($item["name"] . " (" . ucfirst($item["category"]) . ")"); ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="quantity">Quantity</label>
-                            <input type="number" id="quantity" name="quantity" class="form-control" min="1" required>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label for="price">Price ($)</label>
-                            <input type="number" id="price" name="price" class="form-control" min="0.01" step="0.01" required>
-                        </div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <button type="submit" class="btn btn-primary">Add to Inventory</button>
-                            <button type="button" id="cancel-add" class="btn btn-secondary">Cancel</button>
-                        </div>
-                    </div>
-                </form>
+            <div class="chart-container">
+                <div class="chart-card">
+                    <h3>Inventory by Category</h3>
+                    <canvas id="categoryChart"></canvas>
+                </div>
+                
+                <div class="chart-card">
+                    <h3>Low Stock Alert</h3>
+                    <canvas id="lowStockChart"></canvas>
+                </div>
             </div>
             
             <div class="filters-container">
                 <form method="get" action="inventory.php" class="search-form">
                     <div class="form-row">
                         <div class="form-group">
-                            <input type="text" name="search" placeholder="Search items..." class="form-control" value="<?php echo htmlspecialchars($search); ?>">
+                            <input type="text" name="search" placeholder="Search items or merchants..." class="form-control" value="<?php echo htmlspecialchars($search); ?>">
                         </div>
-                        
+                        <div class="form-group">
+                            <select name="merchant_id" class="form-control">
+                                <option value="">All Merchants</option>
+                                <?php foreach ($merchants as $m): ?>
+                                    <option value="<?php echo $m['merchant_id']; ?>" <?php echo ($merchant_id == $m['merchant_id']) ? 'selected' : ''; ?>>
+                                        <?php echo htmlspecialchars($m['business_name'] . ' (' . $m['city'] . ')'); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
                         <div class="form-group">
                             <select name="category" class="form-control">
                                 <option value="">All Categories</option>
                                 <?php foreach ($categories as $cat): ?>
-                                    <option value="<?php echo $cat; ?>" <?php echo ($category_filter == $cat) ? 'selected' : ''; ?>>
+                                    <option value="<?php echo $cat; ?>" <?php echo ($category == $cat) ? 'selected' : ''; ?>>
                                         <?php echo ucfirst($cat); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
-                        
                         <div class="form-group">
                             <label class="checkbox-container">
                                 <input type="checkbox" name="low_stock" value="1" <?php echo $low_stock ? 'checked' : ''; ?>>
                                 <span class="checkbox-label">Low Stock Only</span>
                             </label>
                         </div>
-                        
                         <div class="form-group">
-                            <button type="submit" class="btn btn-primary">Filter</button>
+                            <button type="submit" class="btn btn-primary">Apply Filters</button>
                             <a href="inventory.php" class="btn btn-secondary">Reset</a>
                         </div>
                     </div>
@@ -396,18 +293,21 @@ log_activity($_SESSION["prs_id"], "view", "inventory", "page", "success");
                 <table class="data-table">
                     <thead>
                         <tr>
+                            <th>Merchant</th>
+                            <th>Location</th>
                             <th>Item</th>
                             <th>Category</th>
                             <th>Quantity</th>
                             <th>Price</th>
                             <th>Value</th>
                             <th>Status</th>
-                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php foreach ($inventory as $item): ?>
                         <tr <?php echo ($item["quantity"] < 10) ? 'class="low-stock"' : ''; ?>>
+                            <td><?php echo htmlspecialchars($item["business_name"]); ?></td>
+                            <td><?php echo htmlspecialchars($item["city"]); ?></td>
                             <td><?php echo htmlspecialchars($item["item_name"]); ?></td>
                             <td>
                                 <span class="category-badge <?php echo $item["category"]; ?>">
@@ -428,83 +328,16 @@ log_activity($_SESSION["prs_id"], "view", "inventory", "page", "success");
                                     </span>
                                 <?php endif; ?>
                             </td>
-                            <td>
-                                <div class="action-buttons">
-                                    <button type="button" class="btn btn-primary btn-sm edit-btn" 
-                                        data-id="<?php echo $item["inventory_id"]; ?>" 
-                                        data-name="<?php echo htmlspecialchars($item["item_name"]); ?>" 
-                                        data-quantity="<?php echo $item["quantity"]; ?>" 
-                                        data-price="<?php echo $item["price"]; ?>">
-                                        <i class="fas fa-edit"></i>
-                                    </button>
-                                    
-                                    <form method="post" action="inventory.php" class="delete-form" onsubmit="return confirm('Are you sure you want to remove this item from inventory?');">
-                                        <input type="hidden" name="action" value="delete">
-                                        <input type="hidden" name="inventory_id" value="<?php echo $item["inventory_id"]; ?>">
-                                        <button type="submit" class="btn btn-danger btn-sm">
-                                            <i class="fas fa-trash"></i>
-                                        </button>
-                                    </form>
-                                </div>
-                            </td>
                         </tr>
                         <?php endforeach; ?>
                         
                         <?php if (count($inventory) == 0): ?>
                         <tr>
-                            <td colspan="7" class="text-center">No inventory items found.</td>
+                            <td colspan="8" class="text-center">No inventory items found.</td>
                         </tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
-            </div>
-            
-            <?php if ($total_pages > 1): ?>
-            <div class="pagination">
-                <?php if ($page > 1): ?>
-                    <a href="?page=<?php echo $page - 1; ?>&category=<?php echo urlencode($category_filter); ?>&low_stock=<?php echo $low_stock ? '1' : '0'; ?>&search=<?php echo urlencode($search); ?>" class="btn btn-secondary">&laquo; Previous</a>
-                <?php endif; ?>
-                
-                <?php for ($i = 1; $i <= $total_pages; $i++): ?>
-                    <a href="?page=<?php echo $i; ?>&category=<?php echo urlencode($category_filter); ?>&low_stock=<?php echo $low_stock ? '1' : '0'; ?>&search=<?php echo urlencode($search); ?>" class="btn <?php echo ($i == $page) ? 'btn-primary' : 'btn-secondary'; ?>"><?php echo $i; ?></a>
-                <?php endfor; ?>
-                
-                <?php if ($page < $total_pages): ?>
-                    <a href="?page=<?php echo $page + 1; ?>&category=<?php echo urlencode($category_filter); ?>&low_stock=<?php echo $low_stock ? '1' : '0'; ?>&search=<?php echo urlencode($search); ?>" class="btn btn-secondary">Next &raquo;</a>
-                <?php endif; ?>
-            </div>
-            <?php endif; ?>
-            
-            <div id="edit-modal" class="modal" style="display: none;">
-                <div class="modal-content">
-                    <span class="close">&times;</span>
-                    <h3>Edit Inventory Item</h3>
-                    <form method="post" action="inventory.php" id="edit-form">
-                        <input type="hidden" name="action" value="update">
-                        <input type="hidden" name="inventory_id" id="edit-id">
-                        
-                        <div class="form-group">
-                            <label>Item:</label>
-                            <p id="edit-name"></p>
-                        </div>
-                        
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label for="edit-quantity">Quantity</label>
-                                <input type="number" id="edit-quantity" name="quantity" class="form-control" min="0" required>
-                            </div>
-                            
-                            <div class="form-group">
-                                <label for="edit-price">Price ($)</label>
-                                <input type="number" id="edit-price" name="price" class="form-control" min="0.01" step="0.01" required>
-                            </div>
-                        </div>
-                        
-                        <div class="form-group">
-                            <button type="submit" class="btn btn-primary">Update Inventory</button>
-                        </div>
-                    </form>
-                </div>
             </div>
         </div>
     </main>
@@ -514,49 +347,85 @@ log_activity($_SESSION["prs_id"], "view", "inventory", "page", "success");
     </footer>
     
     <script>
-        const addItemBtn = document.getElementById('add-item-btn');
-        const addItemForm = document.getElementById('add-item-form');
-        const cancelAddBtn = document.getElementById('cancel-add');
-        
-        addItemBtn.addEventListener('click', function() {
-            addItemForm.style.display = 'block';
-            addItemBtn.style.display = 'none';
-        });
-        
-        cancelAddBtn.addEventListener('click', function() {
-            addItemForm.style.display = 'none';
-            addItemBtn.style.display = 'block';
-        });
-        
-        const editModal = document.getElementById('edit-modal');
-        const editBtns = document.querySelectorAll('.edit-btn');
-        const closeBtn = document.querySelector('.close');
-        
-        editBtns.forEach(btn => {
-            btn.addEventListener('click', function() {
-                const id = this.getAttribute('data-id');
-                const name = this.getAttribute('data-name');
-                const quantity = this.getAttribute('data-quantity');
-                const price = this.getAttribute('data-price');
-                
-                document.getElementById('edit-id').value = id;
-                document.getElementById('edit-name').textContent = name;
-                document.getElementById('edit-quantity').value = quantity;
-                document.getElementById('edit-price').value = price;
-                
-                editModal.style.display = 'block';
-            });
-        });
-        
-        closeBtn.addEventListener('click', function() {
-            editModal.style.display = 'none';
-        });
-        
-        window.addEventListener('click', function(event) {
-            if (event.target == editModal) {
-                editModal.style.display = 'none';
+        // Prepare data for category chart
+        const categoryData = {
+            labels: [
+                <?php 
+                foreach ($stats['by_category'] as $cat => $data) {
+                    echo "'" . ucfirst($cat) . "', ";
+                }
+                ?>
+            ],
+            datasets: [{
+                label: 'Item Count',
+                data: [
+                    <?php 
+                    foreach ($stats['by_category'] as $cat => $data) {
+                        echo $data['item_count'] . ", ";
+                    }
+                    ?>
+                ],
+                backgroundColor: [
+                    'rgba(75, 192, 192, 0.6)',
+                    'rgba(54, 162, 235, 0.6)',
+                    'rgba(255, 99, 132, 0.6)',
+                    'rgba(255, 206, 86, 0.6)'
+                ],
+                borderColor: [
+                    'rgba(75, 192, 192, 1)',
+                    'rgba(54, 162, 235, 1)',
+                    'rgba(255, 99, 132, 1)',
+                    'rgba(255, 206, 86, 1)'
+                ],
+                borderWidth: 1
+            }]
+        };
+
+        const categoryChart = new Chart(
+            document.getElementById('categoryChart'),
+            {
+                type: 'pie',
+                data: categoryData,
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                        }
+                    }
+                }
             }
-        });
+        );
+        
+        // Prepare data for low stock chart
+        const lowStockData = {
+            labels: ['Essential', 'Medical', 'Regular', 'Restricted'],
+            datasets: [{
+                label: 'Low Stock Items',
+                data: [12, 19, 5, 2],
+                backgroundColor: 'rgba(255, 99, 132, 0.6)',
+                borderColor: 'rgba(255, 99, 132, 1)',
+                borderWidth: 1
+            }]
+        };
+
+        const lowStockChart = new Chart(
+            document.getElementById('lowStockChart'),
+            {
+                type: 'bar',
+                data: lowStockData,
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            }
+        );
     </script>
+    
+    <script src="../../assets/js/main.js"></script>
 </body>
 </html>

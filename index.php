@@ -6,104 +6,65 @@ if (!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true) {
     exit;
 }
 
-if ($_SESSION["role"] !== "merchant") {
+if ($_SESSION["role"] !== "government") {
     header("location: ../../index.php");
     exit;
 }
 
 require_once "../../config/db_connect.php";
 
-$merchant = [];
-$sql = "SELECT m.*, u.city, u.postal_code 
-        FROM merchants m 
-        JOIN users u ON m.prs_id = u.prs_id 
-        WHERE m.prs_id = ?";
+$stats = [
+    'total_users' => 0,
+    'vaccinated_users' => 0,
+    'active_merchants' => 0,
+    'essential_items' => 0
+];
 
-if ($stmt = $conn->prepare($sql)) {
-    $stmt->bind_param("s", $_SESSION["prs_id"]);
-    
-    if ($stmt->execute()) {
-        $result = $stmt->get_result();
-        
-        if ($result->num_rows == 1) {
-            $merchant = $result->fetch_assoc();
-        }
+$sql = "SELECT COUNT(*) as count FROM users WHERE role = 'public'";
+if ($result = $conn->query($sql)) {
+    if ($row = $result->fetch_assoc()) {
+        $stats['total_users'] = $row['count'];
     }
-    
-    $stmt->close();
 }
 
-$inventory = [];
-$sql = "SELECT i.inventory_id, i.item_id, it.name as item_name, it.category, i.quantity, i.price, 
-        CASE 
-            WHEN it.category IN ('essential', 'medical') AND i.quantity < 10 THEN 'low' 
-            ELSE 'ok' 
-        END as stock_status
+$sql = "SELECT COUNT(DISTINCT prs_id) as count FROM vaccinations";
+if ($result = $conn->query($sql)) {
+    if ($row = $result->fetch_assoc()) {
+        $stats['vaccinated_users'] = $row['count'];
+    }
+}
+
+$sql = "SELECT COUNT(*) as count FROM merchants WHERE status = 'active'";
+if ($result = $conn->query($sql)) {
+    if ($row = $result->fetch_assoc()) {
+        $stats['active_merchants'] = $row['count'];
+    }
+}
+
+$sql = "SELECT SUM(i.quantity) as count 
         FROM inventory i 
         JOIN items it ON i.item_id = it.item_id 
-        JOIN merchants m ON i.merchant_id = m.merchant_id 
-        WHERE m.prs_id = ? 
-        ORDER BY it.category, it.name";
-
-if ($stmt = $conn->prepare($sql)) {
-    $stmt->bind_param("s", $_SESSION["prs_id"]);
-    
-    if ($stmt->execute()) {
-        $result = $stmt->get_result();
-        
-        while ($row = $result->fetch_assoc()) {
-            $inventory[] = $row;
-        }
+        WHERE it.category IN ('essential', 'medical')";
+if ($result = $conn->query($sql)) {
+    if ($row = $result->fetch_assoc()) {
+        $stats['essential_items'] = $row['count'] ?? 0;
     }
-    
-    $stmt->close();
 }
 
-$sales = [];
-$sql = "SELECT t.transaction_id, t.prs_id, t.transaction_date, t.total_amount, 
-        COUNT(ti.id) as item_count 
+$transactions = [];
+$sql = "SELECT t.transaction_id, t.prs_id, t.transaction_date, m.business_name, t.total_amount 
         FROM transactions t 
-        JOIN transaction_items ti ON t.transaction_id = ti.transaction_id 
         JOIN merchants m ON t.merchant_id = m.merchant_id 
-        WHERE m.prs_id = ? 
-        GROUP BY t.transaction_id 
         ORDER BY t.transaction_date DESC 
         LIMIT 10";
 
-if ($stmt = $conn->prepare($sql)) {
-    $stmt->bind_param("s", $_SESSION["prs_id"]);
-    
-    if ($stmt->execute()) {
-        $result = $stmt->get_result();
-        
-        while ($row = $result->fetch_assoc()) {
-            $sales[] = $row;
-        }
-    }
-    
-    $stmt->close();
-}
-
-$inventory_stats = [
-    'total_items' => count($inventory),
-    'total_value' => 0,
-    'low_stock' => 0,
-    'restricted_items' => 0
-];
-
-foreach ($inventory as $item) {
-    $inventory_stats['total_value'] += $item['quantity'] * $item['price'];
-    
-    if ($item['stock_status'] == 'low') {
-        $inventory_stats['low_stock']++;
-    }
-    
-    if ($item['category'] == 'restricted') {
-        $inventory_stats['restricted_items']++;
+if ($result = $conn->query($sql)) {
+    while ($row = $result->fetch_assoc()) {
+        $transactions[] = $row;
     }
 }
 
-log_activity($_SESSION["prs_id"], "view", "dashboard", "merchant", "success");
+log_activity($_SESSION["prs_id"], "view", "dashboard", "government", "success");
 ?>
 
 <!DOCTYPE html>
@@ -111,9 +72,9 @@ log_activity($_SESSION["prs_id"], "view", "dashboard", "merchant", "success");
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Merchant Dashboard - Pandemic Resilience System</title>
+    <title>Government Dashboard - Pandemic Resilience System</title>
     <link rel="stylesheet" href="../../assets/css/main.css">
-    <link rel="stylesheet" href="../../assets/css/merchant-dashboard.css">
+    <link rel="stylesheet" href="../../assets/css/gov-dashboard.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -131,159 +92,94 @@ log_activity($_SESSION["prs_id"], "view", "dashboard", "merchant", "success");
     <main class="dashboard-container">
         <aside class="sidebar">
             <div class="user-profile">
-                <div class="profile-pic merchant">
-                    <span><?php echo substr($merchant["business_name"] ?? $_SESSION["name"], 0, 1); ?></span>
+                <div class="profile-pic gov">
+                    <span><?php echo substr($_SESSION["name"], 0, 1); ?></span>
                 </div>
                 <div class="profile-info">
-                    <h3><?php echo htmlspecialchars($merchant["business_name"] ?? $_SESSION["name"]); ?></h3>
-                    <p>
-                        <?php 
-                        if (!empty($merchant)) {
-                            echo htmlspecialchars($merchant["status"]);
-                            echo ' • License #' . htmlspecialchars(substr($merchant["license_number"], -5));
-                        } else {
-                            echo "Merchant";
-                        }
-                        ?>
-                    </p>
+                    <h3><?php echo htmlspecialchars($_SESSION["name"]); ?></h3>
+                    <p>Government Official</p>
                 </div>
             </div>
             
             <nav class="sidebar-nav">
                 <ul>
                     <li><a href="index.php" class="active">Dashboard</a></li>
-                    <li><a href="inventory.php">Manage Inventory</a></li>
-                    <li><a href="sales.php">Sales History</a></li>
-                    <li><a href="reports.php">Reports</a></li>
-                    <li><a href="#">Business Profile</a></li>
+                    <li><a href="users.php">Manage Users</a></li>
+                    <li><a href="merchants.php">Manage Merchants</a></li>
+                    <li><a href="inventory.php">Inventory Status</a></li>
+                    <li><a href="reports.php">Reports & Analytics</a></li>
+                    <li><a href="#">System Settings</a></li>
                 </ul>
             </nav>
         </aside>
         
         <div class="dashboard-content">
-            <h2>Merchant Dashboard</h2>
-            
-            <?php if ($merchant['status'] !== 'active'): ?>
-            <div class="alert alert-warning">
-                <strong>Note:</strong> Your merchant account is currently <?php echo htmlspecialchars($merchant['status']); ?>. 
-                <?php if ($merchant['status'] == 'pending'): ?>
-                Your application is under review by government officials.
-                <?php elseif ($merchant['status'] == 'suspended'): ?>
-                Please contact support for more information.
-                <?php endif; ?>
-            </div>
-            <?php endif; ?>
+            <h2>Government Dashboard</h2>
             
             <div class="stats-container">
+                <div class="stat-card">
+                    <div class="stat-icon users">
+                        <i class="fas fa-users"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>Total Citizens</h3>
+                        <p class="stat-value"><?php echo number_format($stats['total_users']); ?></p>
+                    </div>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="stat-icon vaccinations">
+                        <i class="fas fa-syringe"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>Vaccinated</h3>
+                        <p class="stat-value"><?php echo number_format($stats['vaccinated_users']); ?></p>
+                        <p class="stat-percent">
+                            <?php 
+                            $percent = ($stats['total_users'] > 0) ? round(($stats['vaccinated_users'] / $stats['total_users']) * 100) : 0;
+                            echo $percent . '%';
+                            ?>
+                        </p>
+                    </div>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="stat-icon merchants">
+                        <i class="fas fa-store"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>Active Merchants</h3>
+                        <p class="stat-value"><?php echo number_format($stats['active_merchants']); ?></p>
+                    </div>
+                </div>
+                
                 <div class="stat-card">
                     <div class="stat-icon inventory">
                         <i class="fas fa-box"></i>
                     </div>
                     <div class="stat-info">
-                        <h3>Inventory Items</h3>
-                        <p class="stat-value"><?php echo number_format($inventory_stats['total_items']); ?></p>
-                    </div>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-icon value">
-                        <i class="fas fa-dollar-sign"></i>
-                    </div>
-                    <div class="stat-info">
-                        <h3>Inventory Value</h3>
-                        <p class="stat-value">$<?php echo number_format($inventory_stats['total_value'], 2); ?></p>
-                    </div>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-icon warning">
-                        <i class="fas fa-exclamation-triangle"></i>
-                    </div>
-                    <div class="stat-info">
-                        <h3>Low Stock Items</h3>
-                        <p class="stat-value"><?php echo number_format($inventory_stats['low_stock']); ?></p>
-                    </div>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-icon restricted">
-                        <i class="fas fa-lock"></i>
-                    </div>
-                    <div class="stat-info">
-                        <h3>Restricted Items</h3>
-                        <p class="stat-value"><?php echo number_format($inventory_stats['restricted_items']); ?></p>
+                        <h3>Essential Items</h3>
+                        <p class="stat-value"><?php echo number_format($stats['essential_items']); ?></p>
                     </div>
                 </div>
             </div>
             
             <div class="chart-container">
                 <div class="chart-card">
-                    <h3>Sales Trend</h3>
-                    <canvas id="salesChart"></canvas>
+                    <h3>Vaccination Progress</h3>
+                    <canvas id="vaccinationChart"></canvas>
                 </div>
                 
                 <div class="chart-card">
-                    <h3>Inventory by Category</h3>
-                    <canvas id="inventoryChart"></canvas>
+                    <h3>Essential Supplies Status</h3>
+                    <canvas id="supplyChart"></canvas>
                 </div>
             </div>
             
             <div class="dashboard-section">
                 <div class="section-header">
-                    <h3>Inventory Status</h3>
-                    <a href="inventory.php" class="btn btn-primary btn-sm">Manage Inventory</a>
-                </div>
-                
-                <div class="table-responsive">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Item</th>
-                                <th>Category</th>
-                                <th>Quantity</th>
-                                <th>Price</th>
-                                <th>Value</th>
-                                <th>Status</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($inventory as $item): ?>
-                            <tr>
-                                <td><?php echo htmlspecialchars($item["item_name"]); ?></td>
-                                <td>
-                                    <span class="category-badge <?php echo $item["category"]; ?>">
-                                        <?php echo ucfirst($item["category"]); ?>
-                                    </span>
-                                </td>
-                                <td><?php echo number_format($item["quantity"]); ?></td>
-                                <td>$<?php echo number_format($item["price"], 2); ?></td>
-                                <td>$<?php echo number_format($item["quantity"] * $item["price"], 2); ?></td>
-                                <td>
-                                    <span class="status-indicator <?php echo $item["stock_status"]; ?>">
-                                        <?php echo ($item["stock_status"] == 'low') ? 'Low Stock' : 'In Stock'; ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <a href="#" class="btn btn-primary btn-sm">Update</a>
-                                </td>
-                            </tr>
-                            <?php endforeach; ?>
-                            
-                            <?php if (count($inventory) == 0): ?>
-                            <tr>
-                                <td colspan="7" class="text-center">No inventory items found.</td>
-                            </tr>
-                            <?php endif; ?>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            
-            <div class="dashboard-section">
-                <div class="section-header">
-                    <h3>Recent Sales</h3>
-                    <a href="sales.php" class="btn btn-primary btn-sm">View All Sales</a>
+                    <h3>Recent Transactions</h3>
+                    <a href="#" class="btn btn-primary btn-sm">View All</a>
                 </div>
                 
                 <div class="table-responsive">
@@ -291,34 +187,78 @@ log_activity($_SESSION["prs_id"], "view", "dashboard", "merchant", "success");
                         <thead>
                             <tr>
                                 <th>Transaction ID</th>
-                                <th>Customer ID</th>
+                                <th>User ID</th>
+                                <th>Merchant</th>
                                 <th>Date</th>
-                                <th>Items</th>
                                 <th>Amount</th>
                                 <th>Action</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ($sales as $sale): ?>
+                            <?php foreach ($transactions as $transaction): ?>
                             <tr>
-                                <td><?php echo $sale["transaction_id"]; ?></td>
-                                <td><?php echo htmlspecialchars($sale["prs_id"]); ?></td>
-                                <td><?php echo date("M j, Y g:i A", strtotime($sale["transaction_date"])); ?></td>
-                                <td><?php echo $sale["item_count"]; ?> items</td>
-                                <td>$<?php echo number_format($sale["total_amount"], 2); ?></td>
+                                <td><?php echo $transaction["transaction_id"]; ?></td>
+                                <td><?php echo htmlspecialchars($transaction["prs_id"]); ?></td>
+                                <td><?php echo htmlspecialchars($transaction["business_name"]); ?></td>
+                                <td><?php echo date("M j, Y g:i A", strtotime($transaction["transaction_date"])); ?></td>
+                                <td>$<?php echo number_format($transaction["total_amount"], 2); ?></td>
                                 <td>
                                     <a href="#" class="btn btn-primary btn-sm">View Details</a>
                                 </td>
                             </tr>
                             <?php endforeach; ?>
                             
-                            <?php if (count($sales) == 0): ?>
+                            <?php if (count($transactions) == 0): ?>
                             <tr>
-                                <td colspan="6" class="text-center">No recent sales found.</td>
+                                <td colspan="6" class="text-center">No recent transactions found.</td>
                             </tr>
                             <?php endif; ?>
                         </tbody>
                     </table>
+                </div>
+            </div>
+            
+            <div class="dashboard-section">
+                <div class="section-header">
+                    <h3>System Alerts</h3>
+                    <a href="#" class="btn btn-primary btn-sm">Manage Alerts</a>
+                </div>
+                
+                <div class="alerts-container">
+                    <div class="alert-card warning">
+                        <div class="alert-header">
+                            <h4>Low Inventory Warning</h4>
+                            <span class="alert-date">May 4, 2025</span>
+                        </div>
+                        <p>Medical supplies (N95 masks) are running low in 3 districts. Consider distribution adjustment.</p>
+                        <div class="alert-actions">
+                            <a href="#" class="btn btn-secondary btn-sm">View Details</a>
+                            <a href="#" class="btn btn-primary btn-sm">Take Action</a>
+                        </div>
+                    </div>
+                    
+                    <div class="alert-card info">
+                        <div class="alert-header">
+                            <h4>Vaccination Campaign Update</h4>
+                            <span class="alert-date">May 3, 2025</span>
+                        </div>
+                        <p>Vaccination rate has increased by 5% in the past week. Current coverage: 78%.</p>
+                        <div class="alert-actions">
+                            <a href="#" class="btn btn-secondary btn-sm">View Details</a>
+                        </div>
+                    </div>
+                    
+                    <div class="alert-card danger">
+                        <div class="alert-header">
+                            <h4>Security Alert</h4>
+                            <span class="alert-date">May 2, 2025</span>
+                        </div>
+                        <p>Multiple failed login attempts detected for government accounts. Security team has been notified.</p>
+                        <div class="alert-actions">
+                            <a href="#" class="btn btn-secondary btn-sm">View Details</a>
+                            <a href="#" class="btn btn-primary btn-sm">Review Logs</a>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -329,23 +269,63 @@ log_activity($_SESSION["prs_id"], "view", "dashboard", "merchant", "success");
     </footer>
     
     <script>
-        const salesData = {
+        const vaccinationData = {
             labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May'],
             datasets: [{
-                label: 'Sales Amount ($)',
-                data: [4500, 5200, 6800, 5500, 7500],
-                backgroundColor: 'rgba(75, 192, 192, 0.2)',
-                borderColor: 'rgba(75, 192, 192, 1)',
+                label: 'Vaccination Rate (%)',
+                data: [45, 52, 60, 72, 78],
+                backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                borderColor: 'rgba(54, 162, 235, 1)',
                 borderWidth: 2,
                 tension: 0.4
             }]
         };
 
-        const salesChart = new Chart(
-            document.getElementById('salesChart'),
+        const vaccinationChart = new Chart(
+            document.getElementById('vaccinationChart'),
             {
                 type: 'line',
-                data: salesData,
+                data: vaccinationData,
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            }
+        );
+        
+        const supplyData = {
+            labels: ['Masks', 'Sanitizers', 'Medications', 'Food', 'Water'],
+            datasets: [{
+                label: 'Current Stock',
+                data: [8500, 12000, 6000, 15000, 22000],
+                backgroundColor: [
+                    'rgba(75, 192, 192, 0.6)',
+                    'rgba(54, 162, 235, 0.6)',
+                    'rgba(255, 206, 86, 0.6)',
+                    'rgba(75, 192, 192, 0.6)',
+                    'rgba(153, 102, 255, 0.6)'
+                ],
+                borderColor: [
+                    'rgba(75, 192, 192, 1)',
+                    'rgba(54, 162, 235, 1)',
+                    'rgba(255, 206, 86, 1)',
+                    'rgba(75, 192, 192, 1)',
+                    'rgba(153, 102, 255, 1)'
+                ],
+                borderWidth: 1
+            }]
+        };
+
+        const supplyChart = new Chart(
+            document.getElementById('supplyChart'),
+            {
+                type: 'bar',
+                data: supplyData,
                 options: {
                     responsive: true,
                     scales: {
@@ -356,45 +336,8 @@ log_activity($_SESSION["prs_id"], "view", "dashboard", "merchant", "success");
                 }
             }
         );
-        
-        const inventoryData = {
-            labels: ['Essential', 'Medical', 'Restricted', 'Normal'],
-            datasets: [{
-                label: 'Items by Category',
-                data: [12, 8, 3, 5],
-                backgroundColor: [
-                    'rgba(75, 192, 192, 0.6)',
-                    'rgba(54, 162, 235, 0.6)',
-                    'rgba(255, 99, 132, 0.6)',
-                    'rgba(255, 206, 86, 0.6)'
-                ],
-                borderColor: [
-                    'rgba(75, 192, 192, 1)',
-                    'rgba(54, 162, 235, 1)',
-                    'rgba(255, 99, 132, 1)',
-                    'rgba(255, 206, 86, 1)'
-                ],
-                borderWidth: 1
-            }]
-        };
-
-        const inventoryChart = new Chart(
-            document.getElementById('inventoryChart'),
-            {
-                type: 'pie',
-                data: inventoryData,
-                options: {
-                    responsive: true,
-                    plugins: {
-                        legend: {
-                            position: 'right'
-                        }
-                    }
-                }
-            }
-        );
     </script>
     
-    <script src="../../assets/js/merchant-dashboard.js"></script>
+    <script src="../../assets/js/gov-dashboard.js"></script>
 </body>
 </html>
